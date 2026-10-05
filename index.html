@@ -263,10 +263,28 @@
       while(selected.length<count){const candidates=pieces.filter(p=>!selected.includes(p));if(!candidates.length)break;candidates.sort((a,b)=>{const score=p=>touchesEdge(p)*1000+selected.reduce((sum,q)=>sum+sharedEdge(p,q)*100,0)+Math.random();return score(a)-score(b);});selected.push(candidates[0]);}
       selected.forEach(p=>{p.gx=p.solutionGx;p.gy=p.solutionGy;p.placed=true;p.locked=true;p.lockFade=1;p.snapTime=performance.now()-1000;});
     }
+    const metricEndpoint="https://hide-puzzle-game.raku411-w.chatgpt.site/api/metrics";
+    let metricSession=null;
+    const metricReady=fetch(metricEndpoint,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({kind:'session'})}).then(r=>r.ok?r.json():null).then(s=>metricSession=s).catch(()=>null);
+    function recordMetric(kind,data={}){
+      const id=crypto.randomUUID();
+      const send=s=>{if(!s)return;const body=JSON.stringify({id,kind,session:s.id,token:s.token,...data});
+        if(document.visibilityState==='hidden'&&navigator.sendBeacon){navigator.sendBeacon(metricEndpoint,new Blob([body],{type:'text/plain'}));return}
+        const request=()=>fetch(metricEndpoint,{method:'POST',headers:{'Content-Type':'text/plain'},body,keepalive:true});
+        request().then(r=>{if(r.status>=500)setTimeout(()=>request().catch(()=>{}),500)}).catch(()=>setTimeout(()=>request().catch(()=>{}),500));
+      };
+      if(metricSession)send(metricSession);else metricReady.then(send);
+    }
+
+    let metricRound=null;
+    function ensureMetricRound(){if(metricRound)return;metricRound={mode:launchType,size:grid};recordMetric('start',metricRound)}
+    function finishMetricRound(kind,durationMs){if(!metricRound)return;recordMetric(kind,{...metricRound,durationMs:Math.min(3600000,Math.max(0,durationMs??Math.round(elapsed()*1000)))});metricRound=null}
+    window.addEventListener('pagehide',()=>finishMetricRound('abandon'));
     function reset(keepLevel=true){
+      finishMetricRound('abandon');
       if(!keepLevel){grid=selectedGrid;level=grid-3;}pieces=makePuzzle(grid);
       const seeded=launchType==='campaign'?(level===4?1:level===5||level===6?2:0):0;if(seeded)seedInitialPieces(seeded);
-      clearTimeout(failTimer);drag=null;won=false;hintOn=false;hintAnimating=false;eyeHintsLeft=launchType==='campaign'?campaignEyeHints(level):3;timeLimit=campaignTimeLimit(level);eyeHint.classList.remove('active');startedAt=performance.now();pausedTotal=0;pauseStarted=0;timeBarFill.style.transform='scaleX(1)';clearEl.classList.remove('show','record-ready','record-mode','record-checking','time-clear');failEl.classList.remove('show');lastScore=null;progressEl.textContent=`${String(seeded).padStart(2,'0')} / ${String(pieces.length).padStart(2,'0')}`;renderHintLives();layout();
+      clearTimeout(failTimer);drag=null;won=false;hintOn=false;hintAnimating=false;eyeHintsLeft=launchType==='campaign'?campaignEyeHints(level):3;timeLimit=campaignTimeLimit(level);eyeHint.classList.remove('active');startedAt=performance.now();pausedTotal=0;pauseStarted=0;timeBarFill.style.transform='scaleX(1)';clearEl.classList.remove('show','record-ready','record-mode','record-checking','time-clear');failEl.classList.remove('show');lastScore=null;progressEl.textContent=`${String(seeded).padStart(2,'0')} / ${String(pieces.length).padStart(2,'0')}`;renderHintLives();layout();if(playing)ensureMetricRound();
     }
     function drawGrid(){
       ctx.save();ctx.strokeStyle='#0a0a0a';ctx.lineWidth=1;ctx.beginPath();
@@ -317,14 +335,14 @@
       const rows=autoHintsLeft<6?[autoHintsLeft]:[Math.floor(autoHintsLeft/2),Math.ceil(autoHintsLeft/2)];
       rows.forEach(count=>{const row=document.createElement('span');row.className='hint-life-row';for(let i=0;i<count;i++){const dot=document.createElement('span');dot.className='hint-life';row.appendChild(dot);}hintLivesEl.appendChild(row);});
     }
-    function triggerFail(){if(won||!playing)return;hintOn=false;eyeHint.classList.remove('active');draw();pause();playing=false;hint.classList.add('hidden');eyeHint.classList.add('hidden');hintLivesEl.replaceChildren();timeBar.classList.remove('show');failEl.classList.add('show');}
+    function triggerFail(){if(won||!playing)return;finishMetricRound('fail');hintOn=false;eyeHint.classList.remove('active');draw();pause();playing=false;hint.classList.add('hidden');eyeHint.classList.add('hidden');hintLivesEl.replaceChildren();timeBar.classList.remove('show');failEl.classList.add('show');}
     function openLifePicker(){pendingLife=5;document.getElementById('lifeNumber').textContent=pendingLife;modeEl.classList.add('show');}
     function timeAttackHints(size){return size<=5?0:size<=7?1:2;}
-    function startGame(type,size,hints){launchType=type;if(type==='campaign')campaignTotalMs=0;initialAutoHints=type==='campaign'?hints:timeAttackHints(size);autoHintsLeft=initialAutoHints;changeScreen(()=>{modeEl.classList.remove('show');stageEl.classList.remove('show');selectLevel(size);playing=true;startedAt=performance.now();pausedTotal=0;selectBtn.setAttribute('aria-expanded','false');homeEl.classList.remove('show');renderHintLives()});}
+    function startGame(type,size,hints){launchType=type;if(type==='campaign')campaignTotalMs=0;initialAutoHints=type==='campaign'?hints:timeAttackHints(size);autoHintsLeft=initialAutoHints;changeScreen(()=>{modeEl.classList.remove('show');stageEl.classList.remove('show');selectLevel(size);playing=true;startedAt=performance.now();pausedTotal=0;selectBtn.setAttribute('aria-expanded','false');homeEl.classList.remove('show');renderHintLives();ensureMetricRound()});}
     function lockedAdjacency(p){const lockedCells=new Set();pieces.filter(v=>v.locked).forEach(v=>v.cells.forEach(([x,y])=>lockedCells.add(`${v.gx+x},${v.gy+y}`)));let shared=0;p.cells.forEach(([x,y])=>{const gx=p.solutionGx+x,gy=p.solutionGy+y;[[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{if(lockedCells.has(`${gx+dx},${gy+dy}`))shared++;});});return shared;}
     async function usePlacementHint(){
       if(!playing||won||drag||hintOn||hintAnimating||autoHintsLeft<=0)return;
-      hintAnimating=true;autoHintsLeft--;renderHintLives();
+      hintAnimating=true;recordMetric('hint',metricRound||{});autoHintsLeft--;renderHintLives();
       const returning=pieces.filter(p=>p.placed&&!p.locked);
       returning.forEach(p=>{p.placed=false;p.gx=p.gy=null;});
       if(returning.length){await Promise.all(returning.map(p=>animatePieceTo(p,p.homeX,p.homeY,680)));await new Promise(resolve=>setTimeout(resolve,280));}
@@ -334,7 +352,7 @@
       hintAnimating=false;renderHintLives();draw();
     }
     function changeScreen(action,duration=2000){if(transitioning)return;transitioning=true;const half=duration/2;fadeEl.style.setProperty('--fade-half',`${half}ms`);fadeEl.classList.add('on');setTimeout(()=>{document.documentElement.classList.add('switching');action();requestAnimationFrame(()=>requestAnimationFrame(()=>fadeEl.classList.remove('on')));setTimeout(()=>{document.documentElement.classList.remove('switching');transitioning=false},half+40);},half);}
-    function update(){const n=pieces.filter(p=>p.placed).length;progressEl.textContent=String(n).padStart(2,'0')+' / '+String(pieces.length).padStart(2,'0');if(n===pieces.length&&!won){won=true;clearTimeout(failTimer);const time=elapsed(),timeMs=Math.round(time*1000),allClear=launchType==='campaign'&&level>=6,delay=innerWidth<=600?500:700,reveal=()=>{clearEl.classList.add('show');if(clearEl.classList.contains('record-ready'))startRecordReveal();};if(launchType==='campaign')campaignTotalMs+=timeMs;resultEl.textContent=allClear?'TOTAL TIME '+format(campaignTotalMs/1000):'TIME '+format(time);document.getElementById('clearLevel').textContent=allClear?`${initialAutoHints} HINT MODE COMPLETE`:`LEVEL ${String(level).padStart(2,'0')} COMPLETE`;document.getElementById('clearTitle').textContent=allClear?'ALL CLEAR':'CLEAR';againBtn.textContent=launchType==='select'?'RETRY':'NEXT';againBtn.classList.toggle('hidden',allClear);clearEl.classList.toggle('time-clear',launchType==='select');renderHintLives();if(launchType==='select'){clearEl.classList.add('record-checking');checkQualification(grid,timeMs);}setTimeout(reveal,delay);}}
+    function update(){const n=pieces.filter(p=>p.placed).length;progressEl.textContent=String(n).padStart(2,'0')+' / '+String(pieces.length).padStart(2,'0');if(n===pieces.length&&!won){won=true;clearTimeout(failTimer);const time=elapsed(),timeMs=Math.round(time*1000),allClear=launchType==='campaign'&&level>=6,delay=innerWidth<=600?500:700,reveal=()=>{clearEl.classList.add('show');if(clearEl.classList.contains('record-ready'))startRecordReveal();};finishMetricRound('clear',timeMs);if(launchType==='campaign')campaignTotalMs+=timeMs;resultEl.textContent=allClear?'TOTAL TIME '+format(campaignTotalMs/1000):'TIME '+format(time);document.getElementById('clearLevel').textContent=allClear?`${initialAutoHints} HINT MODE COMPLETE`:`LEVEL ${String(level).padStart(2,'0')} COMPLETE`;document.getElementById('clearTitle').textContent=allClear?'ALL CLEAR':'CLEAR';againBtn.textContent=launchType==='select'?'RETRY':'NEXT';againBtn.classList.toggle('hidden',allClear);clearEl.classList.toggle('time-clear',launchType==='select');renderHintLives();if(launchType==='select'){clearEl.classList.add('record-checking');checkQualification(grid,timeMs);}setTimeout(reveal,delay);}}
     function format(sec){const s=Math.floor(sec);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
     function formatPrecise(ms){const total=Math.max(0,ms),minutes=Math.floor(total/60000),seconds=Math.floor(total%60000/1000),hundredths=Math.floor(total%1000/10);return `${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}.${String(hundredths).padStart(2,'0')}`;}
     function ordinal(n){const mod100=n%100;if(mod100>=11&&mod100<=13)return `${n}th`;return `${n}${n%10===1?'st':n%10===2?'nd':n%10===3?'rd':'th'}`;}
@@ -375,12 +393,12 @@
     document.getElementById('retryBtn').onclick=()=>changeScreen(()=>{autoHintsLeft=initialAutoHints;playing=true;if(launchType==='campaign'){grid=4;level=1;selectedGrid=4;campaignTotalMs=0;}reset(true);renderHintLives()});
     document.getElementById('failHomeBtn').onclick=()=>changeScreen(()=>{failEl.classList.remove('show');playing=false;selectLevel(4);homeEl.classList.add('show')});
     hint.onclick=usePlacementHint;
-    eyeHint.onclick=()=>{if(!playing||won||drag||hintAnimating||(!hintOn&&eyeHintsLeft<=0))return;hintOn=!hintOn;eyeHint.classList.toggle('active',hintOn);if(hintOn)eyeHintsLeft--;renderHintLives();draw()};
+    eyeHint.onclick=()=>{if(!playing||won||drag||hintAnimating||(!hintOn&&eyeHintsLeft<=0))return;hintOn=!hintOn;eyeHint.classList.toggle('active',hintOn);if(hintOn){eyeHintsLeft--;recordMetric('hint',metricRound||{})}renderHintLives();draw()};
     function openRules(){pause();rulesEl.classList.add('show')}function closeRules(){rulesEl.classList.remove('show');resume()}
     document.getElementById('rulesBtn').onclick=openRules;document.getElementById('closeRules').onclick=closeRules;rulesEl.onclick=e=>{if(e.target===rulesEl)closeRules()};
     document.getElementById('brandBtn').onclick=()=>{if(!playing||transitioning)return;pause();confirmEl.classList.add('show')};
     document.getElementById('stayBtn').onclick=()=>{confirmEl.classList.remove('show');resume()};
-    document.getElementById('goHomeBtn').onclick=()=>changeScreen(()=>{confirmEl.classList.remove('show');clearEl.classList.remove('show');playing=false;resume();selectLevel(4);homeEl.classList.add('show')});
+    document.getElementById('goHomeBtn').onclick=()=>changeScreen(()=>{finishMetricRound('abandon');confirmEl.classList.remove('show');clearEl.classList.remove('show');playing=false;resume();selectLevel(4);homeEl.classList.add('show')});
     addEventListener('keydown',e=>{if(e.key==='Escape'){if(rulesEl.classList.contains('show'))closeRules();if(confirmEl.classList.contains('show')){confirmEl.classList.remove('show');resume();}}});
     reset(false);loop();
   })();
